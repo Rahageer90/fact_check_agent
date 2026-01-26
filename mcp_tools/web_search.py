@@ -7,18 +7,18 @@ load_dotenv()
 
 SERPER_API_KEY = os.getenv("SERPAPI_API_KEY")
 
+if not SERPER_API_KEY:
+    raise ValueError("SERPAPI_API_KEY environment variable is not set")
+
 
 def web_search(query: str) -> list:
     """Retrieve general web evidence using Google Serper API"""
-    if not SERPER_API_KEY:
-        return [{"title": "API Key Missing", "url": "", "type": "web"}]
-    
     try:
         conn = http.client.HTTPSConnection("google.serper.dev")
         
         payload = json.dumps({
             "q": query,
-            "num": 5  # Number of results
+            "num": 10  # Number of results - increased for better coverage
         })
         
         headers = {
@@ -32,17 +32,22 @@ def web_search(query: str) -> list:
         
         results = []
         
-        # Extract organic search results
+        # Extract organic search results with additional metadata
         for item in data.get("organic", []):
-            results.append({
+            result = {
                 "title": item.get("title", ""),
                 "url": item.get("link", ""),
-                "type": "web"
-            })
+                "type": "web",
+                "snippet": item.get("snippet", ""),
+                "position": item.get("position", 0)
+            }
+            results.append(result)
         
         conn.close()
         
         return results if results else [{"title": "No results found", "url": "", "type": "web"}]
     
     except Exception as e:
-        return [{"title": f"Web Search Error: {str(e)}", "url": "", "type": "web"}]
+        error_msg = f"Web Search Error: {str(e)}"
+        print(f"❌ {error_msg}")
+        return [{"title": error_msg, "url": "", "type": "web", "error": True}]

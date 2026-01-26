@@ -1,12 +1,12 @@
 fastapi
 uvicorn
-fastmcp
 langchain
 langchain-core
 langchain-google-genai
-
 google-generativeai
-
 python-dotenv
 requests
 pydantic
+fastmcp
+newsapi-python
+anyio
