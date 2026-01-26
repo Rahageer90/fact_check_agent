@@ -1,0 +1,1 @@
+# FastMCP web search tool
