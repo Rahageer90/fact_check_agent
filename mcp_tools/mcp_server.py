@@ -1,105 +1,79 @@
-"""
-MCP Server for Fact-Check AI Agent (FastMCP Implementation)
-"""
 import os
 import json
-import logging
-import asyncio
-import httpx 
+import httpx
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
 
-# --- 1. SETUP LOGGING ---
-logging.basicConfig(
-    filename='mcp_server.log',
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger("fastmcp_server")
-
-# --- 2. LOAD CONFIG ---
+# 1. Load Environment Variables
 load_dotenv()
+
+# We use os.getenv to read from your .env file
 SERPER_API_KEY = os.getenv("SERPAPI_API_KEY")
-NEWS_API_KEY = os.getenv("NEWSAPI_API_KEY")
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
 
-# --- 3. INITIALIZE FAST MCP ---
-mcp = FastMCP("fact-check-mcp-server")
-
-# --- 4. ASYNC TOOL DEFINITIONS ---
-
-@mcp.tool()
-async def web_search(query: str) -> str:
-    """Search the web for general information using Serper API."""
-    logger.info(f"TOOL EXEC: web_search query='{query}'")
+async def web_search_tool(query: str) -> str:
+    """Local Python function to search the web using Serper."""
+    print(f"\n[TOOL] Executing web_search for: '{query}'")
     
     if not SERPER_API_KEY:
-        return json.dumps({"error": "SERPAPI_API_KEY not configured"})
+        return "ERROR: SERPAPI_API_KEY not found in .env file."
+    
+    url = "https://google.serper.dev/search"
+    payload = json.dumps({"q": query, "num": 5})
+    headers = {'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json'}
 
-    # FIX: Use httpx for non-blocking Async HTTP requests
     try:
-        url = "https://google.serper.dev/search"
-        payload = json.dumps({"q": query, "num": 5})
-        headers = {
-            'X-API-KEY': SERPER_API_KEY,
-            'Content-Type': 'application/json'
-        }
-
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, headers=headers, content=payload, timeout=10.0)
+            response = await client.post(url, headers=headers, content=payload, timeout=20.0)
             response.raise_for_status()
             data = response.json()
 
         results = []
         for item in data.get("organic", []):
-            results.append({
-                "title": item.get("title", ""),
-                "url": item.get("link", ""),
-                "snippet": item.get("snippet", "")
-            })
+            title = item.get('title', 'No Title')
+            snippet = item.get('snippet', 'No Snippet')
+            link = item.get('link', '')
+            results.append(f"- {title} ({link}): {snippet}")
         
-        logger.info(f"Found {len(results)} web results")
-        return json.dumps({"results": results})
+        return "\n".join(results) if results else "No results found."
 
     except Exception as e:
-        logger.error(f"Web search failed: {e}")
-        return json.dumps({"error": str(e)})
+        print(f"[TOOL ERROR] Web Search failed: {e}")
+        return f"Error searching web: {str(e)}"
 
-
-@mcp.tool()
-async def news_search(query: str) -> str:
-    """Search for recent news articles using NewsAPI."""
-    logger.info(f"TOOL EXEC: news_search query='{query}'")
+async def news_search_tool(query: str) -> str:
+    """Local Python function to search news using NewsAPI.org."""
+    print(f"\n[TOOL] Executing news_search for: '{query}'")
     
     if not NEWS_API_KEY:
-        return json.dumps({"error": "NEWSAPI_API_KEY not configured"})
+        return "ERROR: NEWS_API_KEY not found in .env file."
 
-    # FIX: Run the blocking NewsAPI client in a separate thread so it doesn't freeze the MCP server
+    # Using HTTPX directly is faster and safer than the blocking library
+    url = "https://newsapi.org/v2/everything"
+    params = {
+        "q": query,
+        "apiKey": NEWS_API_KEY,
+        "language": "en",
+        "pageSize": 5,
+        "sortBy": "relevancy"
+    }
+
     try:
-        def _blocking_news_call():
-            from newsapi import NewsApiClient
-            newsapi_client = NewsApiClient(api_key=NEWS_API_KEY)
-            return newsapi_client.get_everything(q=query, language="en", page_size=5)
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params=params, timeout=20.0)
+            response.raise_for_status()
+            data = response.json()
 
-        # Await the thread execution
-        all_articles = await asyncio.to_thread(_blocking_news_call)
-        
         results = []
-        if all_articles and all_articles.get("articles"):
-            for article in all_articles.get("articles", []):
-                results.append({
-                    "title": article.get("title", ""),
-                    "url": article.get("url", ""),
-                    "source": article.get("source", {}).get("name", "")
-                })
+        if data.get("articles"):
+            for article in data.get("articles", []):
+                title = article.get("title", "No Title")
+                source = article.get("source", {}).get("name", "Unknown Source")
+                description = article.get("description", "No Description")
+                url = article.get("url", "")
+                results.append(f"- [{source}] {title}: {description} ({url})")
         
-        logger.info(f"Found {len(results)} news results")
-        return json.dumps({"results": results})
+        return "\n".join(results) if results else "No news found."
 
     except Exception as e:
-        logger.error(f"News search failed: {e}")
-        return json.dumps({"error": str(e)})
-
-# --- 5. RUN ENTRYPOINT ---
-if __name__ == "__main__":
-    logger.info("Starting FastMCP Server (Async Mode)...")
-    mcp.run()
+        print(f"[TOOL ERROR] News Search failed: {e}")
+        return f"Error searching news: {str(e)}"
