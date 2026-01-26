@@ -1,9 +1,5 @@
-"""
-LangChain ReAct Agent with MCP Client (Corrected)
-"""
-
 import json
-import asyncio
+import sys
 from contextlib import AsyncExitStack
 from langchain_core.tools import tool
 from langchain.agents import create_react_agent, AgentExecutor
@@ -11,10 +7,12 @@ from langchain_core.prompts import PromptTemplate
 from mcp import ClientSession
 from mcp.client.stdio import stdio_client, StdioServerParameters
 from services.gemini import get_gemini_llm
-
-# Global MCP session
+import os
+# Global MCP session (ONE per app)
 _mcp_stack: AsyncExitStack | None = None
 _mcp_session: ClientSession | None = None
+
+
 
 
 async def init_mcp():
@@ -24,70 +22,73 @@ async def init_mcp():
         return _mcp_session
 
     _mcp_stack = AsyncExitStack()
-    await _mcp_stack.__aenter__()
+    
+    # Force UTF-8 environment
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
 
+    # Configure Parameters
     params = StdioServerParameters(
-        command="python",
-        args=["-m", "mcp_tools.mcp_server"]
+        command=sys.executable,
+        args=["-u", "-m", "mcp_tools.mcp_server"], 
+        env=env
     )
 
-    transport = _mcp_stack.enter_context(stdio_client(params))
-    read, write = await transport.__aenter__()
-
-    _mcp_session = ClientSession(read, write)
-    await _mcp_session.initialize()
-    return _mcp_session
-
-
+    try:
+        # Initialize
+        read, write = await _mcp_stack.enter_async_context(stdio_client(params))
+        _mcp_session = ClientSession(read, write)
+        await _mcp_session.initialize()
+        return _mcp_session
+    except Exception as e:
+        print(f"CRITICAL ERROR initializing MCP: {e}")
+        if _mcp_stack:
+            await _mcp_stack.aclose()
+        _mcp_stack = None
+        raise e
+    
 async def shutdown_mcp():
     global _mcp_session, _mcp_stack
     if _mcp_session:
-        await _mcp_session.close()
+        # ClientSession doesn't always have close(), but good to check implementation.
+        # usually just closing the stack handles the transport closure.
+        pass
+        
     if _mcp_stack:
-        await _mcp_stack.__aexit__(None, None, None)
+        await _mcp_stack.aclose()  # Properly close the AsyncExitStack
+        _mcp_stack = None
+        _mcp_session = None
 
 
-def _run_async(coro):
-    """Run async safely inside FastAPI/LangChain"""
+# ===================== ASYNC TOOLS =====================
+
+@tool
+async def web_search(query: str) -> str:
+    """
+    Search the web for factual information related to a claim.
+    MUST be called before news_search.
+    """
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        return asyncio.run_coroutine_threadsafe(coro, loop).result()
-    else:
-        return asyncio.run(coro)
-
-
-# ===================== TOOLS =====================
-
-@tool
-def web_search(query: str) -> str:
-    """
-    Search the general web for factual information related to a claim.
-
-    This tool MUST be used first during fact-checking.
-    It retrieves general web evidence from search engines
-    via the MCP web_search tool.
-    """
-    session = _run_async(init_mcp())
-    result = _run_async(session.call_tool("web_search", {"query": query}))
-    return result.content[0].text if result.content else "{}"
+        session = await init_mcp()
+        result = await session.call_tool("web_search", {"query": query})
+        return result.content[0].text if result.content else "{}"
+    except Exception as e:
+        return f"Error during web_search: {str(e)}"
 
 
 @tool
-def news_search(query: str) -> str:
+async def news_search(query: str) -> str:
     """
-    Search authoritative and recent news articles related to a claim.
-
-    This tool MUST be used after web_search.
-    It retrieves evidence from news sources via the MCP news_search tool.
+    Search recent and authoritative news articles related to a claim.
+    MUST be called after web_search.
     """
-    session = _run_async(init_mcp())
-    result = _run_async(session.call_tool("news_search", {"query": query}))
-    return result.content[0].text if result.content else "{}"
-
+    try:
+        session = await init_mcp()
+        result = await session.call_tool("news_search", {"query": query})
+        return result.content[0].text if result.content else "{}"
+    except Exception as e:
+        return f"Error during news_search: {str(e)}"
 
 
 # ===================== AGENT =====================
@@ -96,16 +97,36 @@ def create_fact_check_agent():
     llm = get_gemini_llm()
 
     prompt = PromptTemplate(
-        input_variables=["input", "agent_scratchpad"],
-        template="""
-You are a fact-checking AI.
+        input_variables=[
+            "input",
+            "agent_scratchpad",
+            "tools",
+            "tool_names",
+        ],
+        template="""You are an expert fact-checking AI.
 
-RULES:
-- You MUST call web_search first
-- You MUST call news_search second
-- Do NOT give verdict before both are called
-
+You have access to the following tools:
 {tools}
+
+Tool names: {tool_names}
+
+RULES (MANDATORY):
+1. You MUST call web_search FIRST
+2. You MUST call news_search SECOND
+3. Do NOT give a verdict before BOTH are called
+
+Use the following format strictly:
+
+Question: {input}
+Thought: you should always think about what to do
+Action: the tool name to use
+Action Input: the input to the tool
+Observation: the result of the tool
+... (this Thought/Action/Observation can repeat)
+Thought: I now have enough information
+Final Answer: your fact-check verdict and explanation
+
+Begin.
 
 Question: {input}
 Thought:{agent_scratchpad}
@@ -117,7 +138,7 @@ Thought:{agent_scratchpad}
     return agent, tools
 
 
-def run_fact_check_agent(claim: str) -> dict:
+async def run_fact_check_agent(claim: str) -> dict:
     agent, tools = create_fact_check_agent()
 
     executor = AgentExecutor(
@@ -125,40 +146,56 @@ def run_fact_check_agent(claim: str) -> dict:
         tools=tools,
         verbose=True,
         return_intermediate_steps=True,
-        max_iterations=10
+        max_iterations=10,
+        handle_parsing_errors=True # Added stability for parsing errors
     )
 
-    result = executor.invoke({"input": claim})
+    result = await executor.ainvoke({"input": claim})
 
     steps = result["intermediate_steps"]
     tool_names = [step[0].tool for step in steps]
 
+    # Rule Enforcement
     if "web_search" not in tool_names or "news_search" not in tool_names:
-        raise ValueError("HARD RULE FAILED: Both MCP tools not called")
+        # If one failed, we might still want to return a result but mark it, 
+        # but your assignment says "automatically rejected".
+        # We will attempt to survive if at least one tool ran, but STRICTLY
+        # the assignment asks for both.
+        # For the sake of the assignment, we keep the error, but check logs if tools fail internally.
+        pass # The validation below handles the rejection logic
+
+    # Check for hard rule failure
+    if "web_search" not in tool_names or "news_search" not in tool_names:
+         raise ValueError("HARD RULE FAILED: Both MCP tools not called. Agent logic incomplete.")
 
     verdict = "Uncertain"
     output = result["output"]
 
-    if "LIKELY TRUE" in output.upper():
+    # Improved Verdict Parsing
+    output_lower = output.lower()
+    if "likely true" in output_lower:
         verdict = "Likely True"
-    elif "LIKELY FALSE" in output.upper():
+    elif "likely false" in output_lower:
         verdict = "Likely False"
+    # Default is Uncertain
 
     sources = []
     for action, obs in steps:
         try:
+            # obs is the JSON string returned by the tool
             data = json.loads(obs)
+            # The server returns {"results": [...]}
             for r in data.get("results", []):
                 if r.get("url"):
                     sources.append({
                         "title": r.get("title", "Untitled"),
                         "url": r["url"],
-                        "type": action.tool.replace("_search", "")
+                        "type": action.tool.replace("_search", "") # "web" or "news"
                     })
-        except:
-            pass
+        except Exception:
+            continue
 
-    # dedupe
+    # dedupe sources by URL
     seen = set()
     final_sources = []
     for s in sources:

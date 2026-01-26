@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.schemas import FactCheckRequest, FactCheckResponse
 from app.agent import run_fact_check_agent, shutdown_mcp
+import asyncio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -16,4 +17,4 @@ app = FastAPI(
 
 @app.post("/fact-check", response_model=FactCheckResponse)
 async def fact_check(request: FactCheckRequest):
-    return run_fact_check_agent(request.claim)
+    return await run_fact_check_agent(request.claim)
