@@ -1,62 +1,39 @@
 import os
 import requests
-from fastmcp import FastMCP
 from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastMCP("news_search_tool")
+NEWSAPI_URL = "https://newsapi.org/v2/everything"
+NEWS_API_KEY = os.getenv("NEWSAPI_API_KEY")
 
-@app.tool()
-def news_search(query: str) -> str:
-    """
-    Perform a news search using NewsAPI and return recent news articles.
+
+def news_search(query: str) -> list:
+    """Retrieve news-based evidence using NewsAPI"""
+    if not NEWS_API_KEY:
+        return [{"title": "API Key Missing", "url": "", "type": "news"}]
     
-    Args:
-        query: The search query for news articles
-        
-    Returns:
-        A string containing news articles with titles, URLs, and descriptions
-    """
-    api_key = os.getenv("NEWSAPI_API_KEY")
-    if not api_key:
-        return "Error: NEWSAPI_API_KEY not found in environment variables"
-    
+    params = {
+        "q": query,
+        "apiKey": NEWS_API_KEY,
+        "language": "en",
+        "pageSize": 5,
+        "sortBy": "relevancy"
+    }
+
     try:
-        url = "https://newsapi.org/v2/everything"
-        params = {
-            "q": query,
-            "apiKey": api_key,
-            "pageSize": 5,  # Limit to 5 articles
-            "sortBy": "relevancy",
-            "language": "en"
-        }
-        
-        response = requests.get(url, params=params)
+        response = requests.get(NEWSAPI_URL, params=params, timeout=10)
         response.raise_for_status()
-        
         data = response.json()
-        articles = []
-        
-        if "articles" in data:
-            for article in data["articles"][:5]:
-                title = article.get("title", "")
-                url = article.get("url", "")
-                description = article.get("description", "")
-                source = article.get("source", {}).get("name", "")
-                
-                articles.append(f"Title: {title}\nSource: {source}\nURL: {url}\nDescription: {description}\n")
-        
-        return "\n".join(articles) if articles else "No news articles found"
-    
+
+        results = []
+        for article in data.get("articles", []):
+            results.append({
+                "title": article.get("title"),
+                "url": article.get("url"),
+                "type": "news"
+            })
+
+        return results
     except Exception as e:
-        return f"Error performing news search: {str(e)}"
-
-# For LangChain compatibility
-from langchain.tools import Tool
-
-news_search_tool = Tool(
-    name="news_search",
-    description="Search for recent news articles related to a claim. Input should be a search query.",
-    func=news_search
-)
+        return [{"title": f"News Search Error: {str(e)}", "url": "", "type": "news"}]
