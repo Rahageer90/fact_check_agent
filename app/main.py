@@ -10,11 +10,11 @@ async def fact_check(request: FactCheckRequest):
     Endpoint to verify a claim using the AI Agent.
     """
     try:
-        # Run the agent directly
+        # Run the agent (logic is now safely inside agent.py)
         result = await run_fact_check_agent(request.claim)
         return FactCheckResponse(**result)
     except Exception as e:
-        # If something breaks, return the error
+        # If something drastically fails outside the agent's try/except
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")
