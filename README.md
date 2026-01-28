@@ -41,6 +41,7 @@ pip install -r requirements.txt
 ```env
 SERPAPI_API_KEY=your_serper_api_key_here
 NEWSAPI_API_KEY=your_newsapi_api_key_here
+GOOGLE_API_KEY=your_gemini_api_key_here
 ```
 
 2. Obtain API keys:
@@ -176,10 +177,6 @@ Check console output for detailed error messages and debugging information.
 3. Make your changes
 4. Add tests if applicable
 5. Submit a pull request
-
-## License
-
-[Add your license here]
 
 ## Disclaimer
 
