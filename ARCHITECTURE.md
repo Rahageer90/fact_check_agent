@@ -1,129 +1,132 @@
-# Fact-Check AI Agent Architecture
+# Fact-Check AI Agent Workflow
 
-## Overview
-This is a comprehensive fact-checking AI agent system built using modern Python frameworks and protocols. The system leverages Model Context Protocol (MCP) for tool integration, LangChain for agent orchestration, and FastAPI for web services. It provides automated fact-checking capabilities by querying web and news sources to verify claims.
-
-## Core Components
-
-### 1. FastAPI Web Application (`app/main.py`)
-- **Purpose**: Provides REST API endpoints for client interactions
-- **Key Features**:
-  - `/fact-check` POST endpoint: Accepts claims for verification
-  - `/` GET endpoint: Health check
-  - Error handling with HTTPException
-- **Dependencies**: Uses Pydantic schemas for request/response validation
-
-### 2. AI Agent Logic (`app/agent.py`)
-- **Purpose**: Core fact-checking intelligence using LangChain ReAct agent
-- **Key Features**:
-  - Asynchronous MCP client integration with proper session lifecycle management
-  - Tool wrapping using LangChain's StructuredTool
-  - Source extraction and verdict determination
-  - Strict enforcement of using both web and news search tools
-- **Architecture**:
-  - Uses AsyncExitStack for robust resource management
-  - Implements SSE transport for MCP communication
-  - Processes intermediate steps to extract sources and track tool usage
-
-### 3. MCP Server (`mcp_tools/mcp_server.py`)
-- **Purpose**: Provides external tool capabilities via Model Context Protocol
-- **Tools Implemented**:
-  - `web_search`: Uses Google Serper API for general web search
-  - `news_search`: Uses NewsAPI for recent news articles
-- **Framework**: Built with FastMCP for simplified MCP implementation
-- **Transport**: Supports SSE (Server-Sent Events) for real-time communication
-
-### 4. Data Models (`app/schemas.py`)
-- **Purpose**: Defines structured data contracts using Pydantic
-- **Models**:
-  - `FactCheckRequest`: Input claim validation
-  - `FactCheckResponse`: Output with verdict, explanation, sources, and tools used
-  - `Source`: Structured source information with title, URL, and type
-
-### 5. LLM Integration (`services/gemini.py`)
-- **Purpose**: Provides language model capabilities for agent reasoning
-- **Implementation**: Integrates Google's Gemini LLM via LangChain
-
-## System Architecture Flow
+## Application Flowchart
 
 ```
-Client Request
-    ↓
-FastAPI Endpoint (/fact-check)
-    ↓
-Agent Execution (run_fact_check_agent)
-    ↓
-MCP Client Connection (SSE Transport)
-    ↓
-Tool Discovery & Wrapping
-    ↓
-LangChain ReAct Agent
-    ↓
-Parallel Tool Calls (web_search + news_search)
-    ↓
-Source Extraction & Verdict Determination
-    ↓
-Structured Response
+┌─────────────────────────────────────────────────────────────────┐
+│                        CLIENT REQUEST                           │
+│  POST /fact-check with JSON: {"claim": "The Earth is flat"}     │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    FASTAPI ENDPOINT                             │
+│  app/main.py: fact_check() function                             │
+│  - Validates request using FactCheckRequest schema             │
+│  - Calls run_fact_check_agent(request.claim)                    │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   AGENT EXECUTION                               │
+│  app/agent.py: run_fact_check_agent(claim)                      │
+│  - Establishes MCP client connection via SSE transport         │
+│  - Initializes session with MCP server at localhost:8000/sse   │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                   TOOL DISCOVERY                                │
+│  - Lists available tools from MCP server                        │
+│  - Finds web_search and news_search tools                       │
+│  - Wraps MCP tools into LangChain StructuredTool objects       │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 LANGCHAIN REACT AGENT                           │
+│  - Initializes Gemini LLM (gemini-2.0-flash)                    │
+│  - Creates ReAct agent with custom prompt                       │
+│  - AgentExecutor configured with tools and max_iterations=10   │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 TOOL EXECUTION                                  │
+│  Agent calls tools in loop until both are used:                │
+│                                                                 │
+│  ┌─────────────────┐    ┌─────────────────┐                     │
+│  │   web_search    │    │   news_search   │                     │
+│  │ (Google Serper) │    │   (NewsAPI)     │                     │
+│  │                 │    │                 │                     │
+│  │ - Queries web   │    │ - Queries news  │                     │
+│  │ - Returns top 5 │    │ - Returns top 5 │                     │
+│  │   results       │    │   articles      │                     │
+│  └─────────────────┘    └─────────────────┘                     │
+│            │                       │                           │
+│            └───────────┬───────────┘                           │
+│                        │                                       │
+│                        ▼                                       │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │            COLLECT AND PROCESS RESULTS                 │   │
+│  │  - Extracts sources from tool responses                 │   │
+│  │  - Parses "- Title (URL)" format into structured data   │   │
+│  │  - Deduplicates sources by URL                          │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│               VERDICT DETERMINATION                             │
+│  - Agent analyzes collected evidence                            │
+│  - Uses Gemini LLM to reason about claim veracity              │
+│  - Determines verdict: Likely True/Likely False/Uncertain      │
+│  - Generates detailed explanation with evidence                 │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                 STRUCTURED RESPONSE                             │
+│  Returns FactCheckResponse:                                     │
+│  {                                                              │
+│    "verdict": "Likely False",                                   │
+│    "explanation": "Based on scientific evidence...",           │
+│    "sources": [                                                 │
+│      {"title": "...", "url": "...", "type": "web"}              │
+│    ],                                                           │
+│    "tools_used": ["web_search", "news_search"]                  │
+│  }                                                              │
+└─────────────────────────────┬───────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      CLIENT RESPONSE                            │
+│  FastAPI returns JSON response to client                       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Key Design Patterns
+## Key Components Involved
 
-### 1. Separation of Concerns
-- **API Layer**: FastAPI handles HTTP requests/responses
-- **Business Logic**: Agent module manages fact-checking workflow
-- **Tool Layer**: MCP server provides external data sources
-- **Data Layer**: Pydantic schemas ensure type safety
+### 1. FastAPI Application (app/main.py)
+- Entry point for HTTP requests
+- Routes to agent execution
+- Handles errors and responses
 
-### 2. Asynchronous Programming
-- Full async/await implementation for scalability
-- Proper resource management with AsyncExitStack
-- Concurrent tool execution potential
+### 2. MCP Server (mcp_tools/mcp_server.py)
+- Runs separately on port 8000
+- Provides web_search and news_search tools
+- Uses FastMCP framework with SSE transport
 
-### 3. Protocol-Based Tool Integration
-- MCP enables standardized tool discovery and calling
-- LangChain adapters bridge MCP tools to agent framework
-- SSE transport for real-time bidirectional communication
+### 3. Agent Logic (app/agent.py)
+- Manages MCP client session lifecycle
+- Wraps tools for LangChain compatibility
+- Orchestrates the fact-checking process
 
-### 4. Error Handling & Resilience
-- Comprehensive try/catch blocks at multiple levels
-- Graceful degradation when tools fail
-- Detailed logging for debugging
+### 4. LLM Service (services/gemini.py)
+- Provides Gemini 2.0 Flash model
+- Used by LangChain agent for reasoning
 
-## Dependencies & Environment
+### 5. Data Schemas (app/schemas.py)
+- FactCheckRequest: Input validation
+- FactCheckResponse: Output structure
+- Source: Individual source format
 
-### Core Dependencies
-- **FastAPI**: Web framework
-- **LangChain**: Agent orchestration
-- **MCP**: Tool protocol
-- **Pydantic**: Data validation
-- **httpx**: Async HTTP client
-- **uvicorn**: ASGI server
+## External Dependencies
+- **Google Serper API**: For web search results
+- **NewsAPI**: For news article search
+- **Google Gemini API**: For language model reasoning
 
-### External APIs
-- **Google Serper API**: Web search capabilities
-- **NewsAPI**: News article search
-- **Google Gemini**: Language model
-
-### Environment Configuration
-- Uses python-dotenv for API key management
-- Requires SERPAPI_API_KEY and NEWSAPI_API_KEY
-
-## Deployment Considerations
-
-### Local Development
-- Run MCP server with SSE transport
-- Start FastAPI application
-- Ensure API keys are configured
-
-### Production Deployment
-- Containerization recommended
-- Separate MCP server and API application instances
-- Load balancing for scalability
-- Monitoring and logging integration
-
-## Future Enhancements
-Based on TODO.md, planned improvements include:
-- Enhanced MCP server configuration
-- Improved agent tool integration
-- Better source parsing and validation
-- Comprehensive testing suite
+## Execution Requirements
+1. MCP server must be running: `fastmcp run mcp_tools/mcp_server.py --transport sse`
+2. FastAPI app must be running: `python -m uvicorn app.main:app --port 9090`
+3. Environment variables configured in .env file
