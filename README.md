@@ -26,7 +26,7 @@ For detailed system architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
+git clone https://github.com/Rahageer90/fact_check_agent.git
 cd fact_check_agent
 ```
 
@@ -149,26 +149,6 @@ To extend the system with additional fact-checking tools:
 1. Add tool functions in `mcp_tools/mcp_server.py`
 2. Decorate with `@mcp.tool()`
 3. Update the agent logic in `app/agent.py` if needed
-
-## Troubleshooting
-
-### Common Issues
-
-1. **"No tools found on MCP server"**
-   - Ensure the MCP server is running on port 8000
-   - Check that API keys are properly set in `.env`
-
-2. **API Key Errors**
-   - Verify `.env` file exists and contains correct keys
-   - Ensure no extra spaces or quotes around key values
-
-3. **Connection Refused**
-   - Confirm both servers are started in the correct order
-   - Check port availability (9090 for API, 8000 for MCP)
-
-### Logs
-
-Check console output for detailed error messages and debugging information.
 
 ## Contributing
 
